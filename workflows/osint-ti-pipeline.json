@@ -1,0 +1,85 @@
+{
+  "name": "AuditorSEC OSINT TI Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "hours", "hoursInterval": 6 }] }
+      },
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://otx.alienvault.com/api/v1/pulses/subscribed",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "name": "Fetch OTX Pulses",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [460, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://api.shodan.io/shodan/host/search",
+        "queryParameters": {
+          "parameters": [
+            { "name": "key", "value": "={{ $env.SHODAN_API_KEY }}" },
+            { "name": "query", "value": "={{ $json.query }}" }
+          ]
+        }
+      },
+      "name": "Shodan Enrichment",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [460, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nreturn items.map(item => ({\n  json: {\n    indicator: item.json.indicator,\n    type: item.json.type,\n    severity: item.json.pulse_info?.count > 5 ? 'HIGH' : 'MEDIUM',\n    timestamp: new Date().toISOString()\n  }\n}));"
+      },
+      "name": "Normalize & Score",
+      "type": "n8n-nodes-base.code",
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "resource": "tableRecord",
+        "operation": "create",
+        "base": { "__rl": true, "mode": "id", "value": "={{ $env.AIRTABLE_BASE_ID }}" },
+        "table": { "__rl": true, "mode": "name", "value": "TI_Indicators" }
+      },
+      "name": "Save to Airtable",
+      "type": "n8n-nodes-base.airtable",
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [{ "value1": "={{ $json.severity }}", "value2": "HIGH" }]
+        }
+      },
+      "name": "Filter HIGH severity",
+      "type": "n8n-nodes-base.filter",
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "=🚨 *HIGH SEVERITY TI ALERT*\n\nIndicator: {{ $json.indicator }}\nType: {{ $json.type }}\nTime: {{ $json.timestamp }}\n\n_AuditorSEC TI Pipeline_",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "name": "Telegram Alert",
+      "type": "n8n-nodes-base.telegram",
+      "position": [1120, 400]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": { "main": [[{ "node": "Fetch OTX Pulses" }, { "node": "Shodan Enrichment" }]] },
+    "Fetch OTX Pulses": { "main": [[{ "node": "Normalize & Score" }]] },
+    "Shodan Enrichment": { "main": [[{ "node": "Normalize & Score" }]] },
+    "Normalize & Score": { "main": [[{ "node": "Save to Airtable" }, { "node": "Filter HIGH severity" }]] },
+    "Filter HIGH severity": { "main": [[{ "node": "Telegram Alert" }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": ["osint", "threat-intelligence", "auditorsec"]
+}
